@@ -1,0 +1,394 @@
+<title>Expert Insights</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap">
+<style>
+  /* Palette and type are the app's own (static/style.css); this page only adds the preview strip
+     and swaps the Flask API + PDF iframe for client-side equivalents. */
+  :root {
+    --page: #f0f2f5;
+    --panel: #ffffff;
+    --viewer: #ecf0f1;
+    --ink: #2c3e50;
+    --ink-2: #34495e;
+    --muted: #7f8c8d;
+    --summary: #555555;
+    --accent: #3498db;
+    --accent-hover: #2980b9;
+    --disabled: #bdc3c7;
+    --company: #16a085;
+    --error: #e74c3c;
+    --line: #dddddd;
+    --strip: #2c3e50;
+    --strip-ink: #ecf0f1;
+    color-scheme: light;
+  }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink-2);
+    font-family: 'Roboto', system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+  .preview-strip {
+    flex: none;
+    background: var(--strip);
+    color: var(--strip-ink);
+    font-size: 12px;
+    line-height: 1.4;
+    padding: 7px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    align-items: baseline;
+  }
+  .preview-strip strong { font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; font-size: 11px; }
+  .preview-strip span { opacity: 0.92; }
+  .container { display: flex; flex: 1 1 auto; min-height: 0; }
+  .search-panel {
+    width: 30%;
+    padding: 20px;
+    background-color: var(--panel);
+    box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+  }
+  h1 { margin-top: 0; color: var(--ink); font-size: 24px; }
+  .search-box { display: flex; margin-bottom: 20px; }
+  #searchInput {
+    flex-grow: 1;
+    min-width: 0;
+    padding: 10px;
+    font-size: 16px;
+    font-family: inherit;
+    border: 1px solid var(--line);
+    border-radius: 4px 0 0 4px;
+    background: var(--panel);
+    color: var(--ink-2);
+  }
+  button {
+    padding: 10px 20px;
+    font-size: 14px;
+    font-family: inherit;
+    background-color: var(--accent);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    border-radius: 0 4px 4px 0;
+    transition: background-color 0.3s;
+  }
+  button:hover { background-color: var(--accent-hover); }
+  button:disabled { background-color: var(--disabled); cursor: not-allowed; }
+  button:focus-visible, #searchInput:focus-visible, #sortBy:focus-visible, .result-item:focus-visible {
+    outline: 2px solid var(--accent-hover); outline-offset: 2px;
+  }
+  .sort-controls { display: flex; align-items: center; margin-bottom: 20px; gap: 8px; }
+  .sort-controls label { white-space: nowrap; }
+  #sortBy { padding: 5px; flex-grow: 1; border-radius: 4px; border: 1px solid var(--line); font-family: inherit; background: var(--panel); color: var(--ink-2); }
+  #sortOrder { padding: 5px 12px; border-radius: 4px; font-size: 16px; }
+  .content-viewer {
+    width: 70%;
+    background-color: var(--viewer);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    position: relative;
+  }
+  #pdfPlaceholder { text-align: center; color: var(--muted); font-size: 18px; padding: 0 16px; }
+  #pdfPages {
+    position: absolute; inset: 0;
+    overflow: auto;
+    padding: 16px;
+    box-sizing: border-box;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+  }
+  #pdfPages canvas { display: block; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.18); max-width: 100%; height: auto; }
+  .sheet {
+    background: #fff; color: var(--ink-2); box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    padding: 28px 32px; box-sizing: border-box; width: min(100%, 720px); font-size: 13px; line-height: 1.5;
+  }
+  .sheet h2 { font-size: 16px; color: var(--ink); margin: 0 0 8px; text-wrap: balance; }
+  .sheet .meta { color: var(--muted); margin: 0 0 14px; }
+  .sheet .note { color: var(--error); margin: 0 0 14px; }
+  .result-item {
+    padding: 15px;
+    background-color: var(--panel);
+    border-radius: 4px;
+    margin-bottom: 15px;
+    cursor: pointer;
+    transition: box-shadow 0.3s, transform 0.3s;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+  }
+  .result-item:hover { box-shadow: 0 5px 15px rgba(0,0,0,0.15); transform: translateY(-2px); }
+  .result-item.active { box-shadow: 0 0 0 2px var(--accent), 0 2px 5px rgba(0,0,0,0.1); }
+  .result-item h3 { margin-top: 0; margin-bottom: 6px; color: var(--ink); font-size: 14px; }
+  .result-item p { margin: 4px 0; color: var(--ink-2); font-size: 13px; }
+  .company { font-weight: bold; color: var(--company); }
+  .date { font-style: italic; color: var(--muted); }
+  .summary { color: var(--summary); font-size: 12px !important; margin-top: 6px !important; }
+  .topics { display: flex; flex-wrap: wrap; margin-top: 6px; }
+  .topic { background-color: var(--accent); color: #fff; padding: 3px 8px; border-radius: 12px; font-size: 11px; margin-right: 5px; margin-bottom: 3px; }
+  .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 20px; gap: 8px; }
+  .pagination button { border-radius: 4px; padding: 8px 14px; }
+  #pageInfo { font-size: 12px; color: var(--summary); text-align: center; font-variant-numeric: tabular-nums; }
+  .loading, .error, .no-results { color: var(--muted); text-align: center; padding: 20px 0; }
+  .error { color: var(--error); }
+  @media (max-width: 768px) {
+    .container { flex-direction: column; }
+    .search-panel, .content-viewer { width: 100%; }
+    .search-panel { flex: 0 0 55%; }
+    .content-viewer { flex: 1 1 auto; min-height: 220px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .result-item, button { transition: none; }
+    .result-item:hover { transform: none; }
+  }
+</style>
+
+<div class="preview-strip">
+  <strong>Preview build</strong>
+  <span>The macOS ExpertInsights app, rebuilt from its bundle and running entirely in this page.</span>
+  <span>Data: __COUNT__ synthetic sample records with placeholder PDFs, because the real export (metadata.csv + pdfs/) was not in the zip.</span>
+</div>
+<div class="container">
+  <div class="search-panel">
+    <h1>Expert Insights</h1>
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="Search by title, company, topic..." aria-label="Search">
+      <button id="searchButton" type="button">Search</button>
+    </div>
+    <div class="sort-controls">
+      <label for="sortBy">Sort by:</label>
+      <select id="sortBy">
+        <option value="released_at">Release Date</option>
+        <option value="title">Title</option>
+      </select>
+      <button id="sortOrder" type="button" aria-label="Toggle sort order">&#8595;</button>
+    </div>
+    <div id="searchResults"></div>
+    <div class="pagination">
+      <button id="prevPage" type="button">Previous</button>
+      <span id="pageInfo"></span>
+      <button id="nextPage" type="button">Next</button>
+    </div>
+  </div>
+  <div class="content-viewer">
+    <div id="pdfPlaceholder">
+      <p>Select a document to view the PDF</p>
+    </div>
+    <div id="pdfPages" hidden></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+<script>
+// ---- Data (what metadata.csv becomes after app.py's read_csv / to_datetime / serialize) ----
+const RECORDS = __RECORDS__;
+const PDFS = __PDFS__;
+const SORT_FIELDS = new Set(['released_at', 'title']);
+const OUT_FIELDS = ['id', 'title', 'primary_companies', 'primary_company_ticker', 'released_at',
+                    'source_label', 'source_descriptor', 'summary', 'page_count'];
+
+// ---- Server side of app.py, re-implemented in the browser ----
+function sortRecords(list, sortBy, sortOrder) {
+  const asc = sortOrder === 'asc';
+  const key = sortBy === 'title' ? r => r.title : r => r._ts;   // NaT (null) always sorts last
+  return list.slice().sort((a, b) => {
+    const ka = key(a), kb = key(b);
+    if (ka == null && kb == null) return 0;
+    if (ka == null) return 1;
+    if (kb == null) return -1;
+    if (ka < kb) return asc ? -1 : 1;
+    if (ka > kb) return asc ? 1 : -1;
+    return 0;
+  });
+}
+const DF = sortRecords(RECORDS, 'released_at', 'desc');   // df = df.sort_values('released_at', ascending=False)
+const serialize = rows => rows.map(r => Object.fromEntries(OUT_FIELDS.map(k => [k, r[k] ?? ''])));
+
+function apiInterviews({ page = 1, per_page = 10, sort_by = 'released_at', sort_order = 'desc' }) {
+  if (!SORT_FIELDS.has(sort_by)) sort_by = 'released_at';
+  const sorted = sortRecords(DF, sort_by, sort_order);
+  const start = (page - 1) * per_page;
+  return { interviews: serialize(sorted.slice(start, start + per_page)), total: DF.length, page, per_page };
+}
+function apiSearch({ query = '', page = 1, per_page = 10, sort_by = 'released_at', sort_order = 'desc' }) {
+  query = query.trim();
+  if (!SORT_FIELDS.has(sort_by)) sort_by = 'released_at';
+  const q = query.toLowerCase();
+  const results = query
+    ? DF.filter(r => ['title', 'primary_companies', 'source_descriptor', 'summary']
+        .some(f => (r[f] || '').toLowerCase().includes(q)))
+    : DF;
+  const sorted = sortRecords(results, sort_by, sort_order);
+  const start = (page - 1) * per_page;
+  return { interviews: serialize(sorted.slice(start, start + per_page)), total: results.length, page, per_page };
+}
+
+// ---- static/script.js, with fetch() swapped for the functions above ----
+let currentQuery = '';
+let currentPage = 1;
+let totalPages = 1;
+let sortBy = 'released_at';
+let sortOrder = 'desc';
+
+function searchInterviews() {
+  const query = document.getElementById('searchInput').value;
+  if (query === currentQuery) return;
+  currentQuery = query;
+  currentPage = 1;
+  fetchInterviews(query);
+}
+
+function fetchInterviews(query = '') {
+  const params = { page: currentPage, sort_by: sortBy, sort_order: sortOrder };
+  const data = query ? apiSearch({ query, ...params }) : apiInterviews(params);
+  displayResults(data.interviews);
+  updatePagination(data.total, data.per_page);
+}
+
+function displayResults(results) {
+  const container = document.getElementById('searchResults');
+  container.innerHTML = '';
+  if (!results || results.length === 0) {
+    container.innerHTML = '<p class="no-results">No results found.</p>';
+    return;
+  }
+  results.forEach(r => {
+    const item = document.createElement('div');
+    item.className = 'result-item';
+    item.tabIndex = 0;
+    item.dataset.id = r.id;
+    const company = r.primary_companies || 'Unknown';
+    const ticker = r.primary_company_ticker ? ` (${r.primary_company_ticker})` : '';
+    const descriptor = r.source_descriptor ? `<span class="topic">${esc(r.source_descriptor)}</span>` : '';
+    const date = r.released_at ? new Date(r.released_at).toLocaleDateString() : '';
+    item.innerHTML = `
+      <h3>${esc(r.title || '(No title)')}</h3>
+      <p class="company">${esc(company)}${esc(ticker)}</p>
+      <p class="date">${date}</p>
+      <div class="topics">${descriptor}</div>
+      <p class="summary">${esc(truncate(r.summary || '', 150))}</p>
+    `;
+    item.onclick = () => displayPDF(r.id);
+    item.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); displayPDF(r.id); } };
+    if (r.id === selectedId) item.classList.add('active');
+    container.appendChild(item);
+  });
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function truncate(text, max) {
+  return text.length <= max ? text : text.substr(0, max) + '...';
+}
+
+function updatePagination(total, perPage) {
+  totalPages = Math.ceil(total / perPage);
+  document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${totalPages} (${total.toLocaleString()} docs)`;
+  document.getElementById('prevPage').disabled = currentPage === 1;
+  document.getElementById('nextPage').disabled = currentPage >= totalPages;
+}
+function changePage(delta) {
+  currentPage += delta;
+  fetchInterviews(currentQuery);
+}
+function updateSort() {
+  sortBy = document.getElementById('sortBy').value;
+  currentPage = 1;
+  fetchInterviews(currentQuery);
+}
+function toggleSortOrder() {
+  sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
+  document.getElementById('sortOrder').innerHTML = sortOrder === 'asc' ? '&#8593;' : '&#8595;';
+  currentPage = 1;
+  fetchInterviews(currentQuery);
+}
+function debounce(func, wait) {
+  let timeout;
+  return function (...args) {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+}
+
+// ---- /pdf/<id>: the app streams the file into an <iframe>; here the PDF is embedded and drawn with pdf.js ----
+let selectedId = null;
+let renderToken = 0;
+
+async function displayPDF(docId) {
+  selectedId = docId;
+  document.querySelectorAll('.result-item').forEach(el => el.classList.toggle('active', el.dataset.id === docId));
+  const pane = document.getElementById('pdfPages');
+  document.getElementById('pdfPlaceholder').hidden = true;
+  pane.hidden = false;
+  const token = ++renderToken;
+  const b64 = PDFS[docId];
+  if (!b64) { pane.innerHTML = '<p class="error">PDF not found</p>'; return; }
+  pane.innerHTML = '<p class="loading">Loading...</p>';
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  try {
+    const lib = window.pdfjsLib;
+    if (!lib) throw new Error('pdf.js did not load');
+    lib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const doc = await lib.getDocument({ data: bytes }).promise;
+    if (token !== renderToken) return;
+    pane.innerHTML = '';
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = Math.min(pane.clientWidth - 32, 760);
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      if (token !== renderToken) return;
+      const base = page.getViewport({ scale: 1 });
+      const scale = cssWidth / base.width;
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
+      canvas.style.width = `${Math.floor(viewport.width)}px`;
+      canvas.setAttribute('aria-label', `Page ${n} of ${doc.numPages}`);
+      pane.appendChild(canvas);
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport, transform: dpr === 1 ? null : [dpr, 0, 0, dpr, 0, 0] }).promise;
+    }
+  } catch (err) {
+    if (token !== renderToken) return;
+    renderFallback(pane, docId, err);
+  }
+}
+
+function renderFallback(pane, docId, err) {
+  const r = RECORDS.find(x => x.id === docId) || {};
+  pane.innerHTML = '';
+  const sheet = document.createElement('div');
+  sheet.className = 'sheet';
+  sheet.innerHTML = `
+    <p class="note">The PDF viewer could not start here (${esc(err && err.message ? err.message : err)}), so this is the record instead of the page images.</p>
+    <h2>${esc(r.title || '(No title)')}</h2>
+    <p class="meta">${esc(r.primary_companies || 'Unknown')}${r.primary_company_ticker ? ' (' + esc(r.primary_company_ticker) + ')' : ''}
+      &middot; ${esc(r.released_at || 'no date')} &middot; ${esc(r.source_descriptor || '')} &middot; ${esc(r.page_count || '?')} pages</p>
+    <p>${esc(r.summary || '')}</p>`;
+  pane.appendChild(sheet);
+}
+
+// ---- wiring ----
+document.getElementById('searchButton').addEventListener('click', searchInterviews);
+document.getElementById('sortBy').addEventListener('change', updateSort);
+document.getElementById('sortOrder').addEventListener('click', toggleSortOrder);
+document.getElementById('prevPage').addEventListener('click', () => changePage(-1));
+document.getElementById('nextPage').addEventListener('click', () => changePage(1));
+document.getElementById('searchInput').addEventListener('input', debounce(searchInterviews, 300));
+document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') searchInterviews(); });
+
+function start() {
+  document.getElementById('searchInput').focus();
+  fetchInterviews();
+}
+start();
+</script>

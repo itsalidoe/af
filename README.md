@@ -54,3 +54,16 @@ expert_insights_export/
 
 A bare `ExpertInsights` executable run from, say, `~/Downloads` resolves the data
 folder to `/` and fails at startup because `/metadata.csv` does not exist.
+
+## Static preview
+
+`preview/expert-insights-preview.html` is a single-file, server-less copy of the UI:
+the CSV rows and PDFs are embedded, the search/sort/paging logic of `app.py` is
+re-implemented in the page, and PDFs are drawn with pdf.js. Rebuild it after
+changing the data with:
+
+```
+python3 preview/build_preview.py expert_insights_export preview/expert-insights-preview.html
+```
+
+`preview/make_sample_data.py <export dir>` regenerates the synthetic sample dataset.
