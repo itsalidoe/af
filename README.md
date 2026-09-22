@@ -68,19 +68,19 @@ folder to `/` and fails at startup because `/metadata.csv` does not exist.
 
 ## Static preview
 
-`preview/expert-insights-preview.html` is a single-file, server-less copy of the UI:
-the CSV rows and PDFs are embedded, the search/sort/paging logic of `app.py` is
-re-implemented in the page, and PDFs are drawn with pdf.js. Rebuild it after
-changing the data with:
+`preview/build_preview.py` produces a single-file, server-less copy of the UI: the CSV
+rows are embedded gzip-compressed, the search/sort/paging logic of `app.py` is
+re-implemented in the page, and every `pdfs/<id>.pdf` that exists is rendered to page
+images with MuPDF (lossless WebP) so no browser PDF engine is involved. Records without
+a PDF show a notice instead.
 
 ```
+pip install -r preview/requirements.txt
 python3 preview/build_preview.py expert_insights_export preview/expert-insights-preview.html \
     --note "Data: one sentence for the banner"
 ```
 
-The records are embedded gzip-compressed (a 4,732-record export becomes a 4.4MB page),
-and every `pdfs/<id>.pdf` that exists is embedded and drawn with pdf.js; records without
-a PDF show a notice instead. Pages above 16MB cannot be hosted as an artifact, so with a
-full PDF set embed a subset.
-
-`preview/make_sample_data.py <export dir>` regenerates the synthetic sample dataset.
+The output is a build product and is not committed. A 4,732-record export with one
+12-page PDF becomes a 5MB page; hosted artifacts are capped at 16MB, so with a full PDF
+set embed a subset. `preview/make_sample_data.py <export dir>` regenerates the synthetic
+sample dataset.

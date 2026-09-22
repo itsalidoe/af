@@ -107,7 +107,7 @@
     box-sizing: border-box;
     display: flex; flex-direction: column; align-items: center; gap: 12px;
   }
-  #pdfPages canvas { display: block; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.18); max-width: 100%; height: auto; }
+  #pdfPages img { display: block; width: min(100%, 760px); height: auto; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.18); }
   .sheet {
     background: #fff; color: var(--ink-2); box-shadow: 0 2px 8px rgba(0,0,0,0.18);
     padding: 28px 32px; box-sizing: border-box; width: min(100%, 720px); font-size: 13px; line-height: 1.5;
@@ -187,12 +187,10 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
 <script>
 // ---- Data (what metadata.csv becomes after app.py's read_csv / to_datetime / serialize) ----
 const DATA_B64 = '__DATA_B64__';   // gzip(JSON array of records), base64
-const PDFS = __PDFS__;
+const PAGES = __PAGES__;   // id -> [page images rendered from pdfs/<id>.pdf at build time]
 let RECORDS = [];
 let DF = [];
 
@@ -281,7 +279,7 @@ function displayResults(results) {
     const company = r.primary_companies || 'Unknown';
     const ticker = r.primary_company_ticker ? ` (${r.primary_company_ticker})` : '';
     const descriptor = (r.source_descriptor ? `<span class="topic">${esc(r.source_descriptor)}</span>` : '')
-      + (PDFS[r.id] ? '<span class="topic pdf" title="PDF included in this preview">PDF</span>' : '');
+      + (PAGES[r.id] ? '<span class="topic pdf" title="PDF included in this preview">PDF</span>' : '');
     const date = r.released_at ? new Date(r.released_at).toLocaleDateString() : '';
     item.innerHTML = `
       <h3>${esc(r.title || '(No title)')}</h3>
@@ -333,20 +331,20 @@ function debounce(func, wait) {
   };
 }
 
-// ---- /pdf/<id>: the app streams the file into an <iframe>; here the PDF is embedded and drawn with pdf.js ----
+// ---- /pdf/<id>: the app streams the file into an <iframe>; here every PDF that existed at build time
+// was rendered to page images (MuPDF, lossless WebP), so nothing depends on a browser PDF engine ----
 let selectedId = null;
-let renderToken = 0;
 
-async function displayPDF(docId) {
+function displayPDF(docId) {
   selectedId = docId;
   document.querySelectorAll('.result-item').forEach(el => el.classList.toggle('active', el.dataset.id === docId));
   const pane = document.getElementById('pdfPages');
   document.getElementById('pdfPlaceholder').hidden = true;
   pane.hidden = false;
-  const token = ++renderToken;
-  const b64 = PDFS[docId];
-  if (!b64) {
-    pane.innerHTML = '';
+  pane.innerHTML = '';
+  pane.scrollTop = 0;
+  const pages = PAGES[docId];
+  if (!pages) {
     const sheet = document.createElement('div');
     sheet.className = 'sheet';
     const r = RECORDS.find(x => x.id === docId) || {};
@@ -360,49 +358,13 @@ async function displayPDF(docId) {
     pane.appendChild(sheet);
     return;
   }
-  pane.innerHTML = '<p class="loading">Loading...</p>';
-  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-  try {
-    const lib = window.pdfjsLib;
-    if (!lib) throw new Error('pdf.js did not load');
-    lib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    const doc = await lib.getDocument({ data: bytes }).promise;
-    if (token !== renderToken) return;
-    pane.innerHTML = '';
-    const dpr = window.devicePixelRatio || 1;
-    const cssWidth = Math.min(pane.clientWidth - 32, 760);
-    for (let n = 1; n <= doc.numPages; n++) {
-      const page = await doc.getPage(n);
-      if (token !== renderToken) return;
-      const base = page.getViewport({ scale: 1 });
-      const scale = cssWidth / base.width;
-      const viewport = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.floor(viewport.width * dpr);
-      canvas.height = Math.floor(viewport.height * dpr);
-      canvas.style.width = `${Math.floor(viewport.width)}px`;
-      canvas.setAttribute('aria-label', `Page ${n} of ${doc.numPages}`);
-      pane.appendChild(canvas);
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport, transform: dpr === 1 ? null : [dpr, 0, 0, dpr, 0, 0] }).promise;
-    }
-  } catch (err) {
-    if (token !== renderToken) return;
-    renderFallback(pane, docId, err);
-  }
-}
-
-function renderFallback(pane, docId, err) {
-  const r = RECORDS.find(x => x.id === docId) || {};
-  pane.innerHTML = '';
-  const sheet = document.createElement('div');
-  sheet.className = 'sheet';
-  sheet.innerHTML = `
-    <p class="note">The PDF viewer could not start here (${esc(err && err.message ? err.message : err)}), so this is the record instead of the page images.</p>
-    <h2>${esc(r.title || '(No title)')}</h2>
-    <p class="meta">${esc(r.primary_companies || 'Unknown')}${r.primary_company_ticker ? ' (' + esc(r.primary_company_ticker) + ')' : ''}
-      &middot; ${esc(r.released_at || 'no date')} &middot; ${esc(r.source_descriptor || '')} &middot; ${esc(r.page_count || '?')} pages</p>
-    <p>${esc(r.summary || '')}</p>`;
-  pane.appendChild(sheet);
+  pages.forEach((src, i) => {
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = `Page ${i + 1} of ${pages.length}`;
+    img.decoding = 'async';
+    pane.appendChild(img);
+  });
 }
 
 // ---- wiring ----
