@@ -133,6 +133,7 @@
   .summary { color: var(--summary); font-size: 12px !important; margin-top: 6px !important; }
   .topics { display: flex; flex-wrap: wrap; margin-top: 6px; }
   .topic { background-color: var(--accent); color: #fff; padding: 3px 8px; border-radius: 12px; font-size: 11px; margin-right: 5px; margin-bottom: 3px; }
+  .topic.pdf { background-color: var(--company); }
   .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 20px; gap: 8px; }
   .pagination button { border-radius: 4px; padding: 8px 14px; }
   #pageInfo { font-size: 12px; color: var(--summary); text-align: center; font-variant-numeric: tabular-nums; }
@@ -153,7 +154,8 @@
 <div class="preview-strip">
   <strong>Preview build</strong>
   <span>The macOS ExpertInsights app, rebuilt from its bundle and running entirely in this page.</span>
-  <span>Data: __COUNT__ synthetic sample records with placeholder PDFs, because the real export (metadata.csv + pdfs/) was not in the zip.</span>
+  <span>__DATA_NOTE__</span>
+  <span>__PDF_NOTE__</span>
 </div>
 <div class="container">
   <div class="search-panel">
@@ -189,8 +191,19 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
 <script>
 // ---- Data (what metadata.csv becomes after app.py's read_csv / to_datetime / serialize) ----
-const RECORDS = __RECORDS__;
+const DATA_B64 = '__DATA_B64__';   // gzip(JSON array of records), base64
 const PDFS = __PDFS__;
+let RECORDS = [];
+let DF = [];
+
+async function loadRecords() {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('this browser cannot decompress the embedded records (no DecompressionStream)');
+  }
+  const bytes = Uint8Array.from(atob(DATA_B64), c => c.charCodeAt(0));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return JSON.parse(await new Response(stream).text());
+}
 const SORT_FIELDS = new Set(['released_at', 'title']);
 const OUT_FIELDS = ['id', 'title', 'primary_companies', 'primary_company_ticker', 'released_at',
                     'source_label', 'source_descriptor', 'summary', 'page_count'];
@@ -209,7 +222,7 @@ function sortRecords(list, sortBy, sortOrder) {
     return 0;
   });
 }
-const DF = sortRecords(RECORDS, 'released_at', 'desc');   // df = df.sort_values('released_at', ascending=False)
+
 const serialize = rows => rows.map(r => Object.fromEntries(OUT_FIELDS.map(k => [k, r[k] ?? ''])));
 
 function apiInterviews({ page = 1, per_page = 10, sort_by = 'released_at', sort_order = 'desc' }) {
@@ -267,7 +280,8 @@ function displayResults(results) {
     item.dataset.id = r.id;
     const company = r.primary_companies || 'Unknown';
     const ticker = r.primary_company_ticker ? ` (${r.primary_company_ticker})` : '';
-    const descriptor = r.source_descriptor ? `<span class="topic">${esc(r.source_descriptor)}</span>` : '';
+    const descriptor = (r.source_descriptor ? `<span class="topic">${esc(r.source_descriptor)}</span>` : '')
+      + (PDFS[r.id] ? '<span class="topic pdf" title="PDF included in this preview">PDF</span>' : '');
     const date = r.released_at ? new Date(r.released_at).toLocaleDateString() : '';
     item.innerHTML = `
       <h3>${esc(r.title || '(No title)')}</h3>
@@ -331,7 +345,21 @@ async function displayPDF(docId) {
   pane.hidden = false;
   const token = ++renderToken;
   const b64 = PDFS[docId];
-  if (!b64) { pane.innerHTML = '<p class="error">PDF not found</p>'; return; }
+  if (!b64) {
+    pane.innerHTML = '';
+    const sheet = document.createElement('div');
+    sheet.className = 'sheet';
+    const r = RECORDS.find(x => x.id === docId) || {};
+    sheet.innerHTML = `<p class="note">PDF not found</p>
+      <h2>${esc(r.title || '(No title)')}</h2>
+      <p class="meta">${esc(r.primary_companies || 'Unknown')}${r.primary_company_ticker ? ' (' + esc(r.primary_company_ticker) + ')' : ''}
+        &middot; ${esc(r.released_at || 'no date')} &middot; ${esc(r.source_descriptor || '')} &middot; ${esc(r.page_count || '?')} pages</p>
+      <p>The file pdfs/${esc(docId)}.pdf was not provided for this preview, so the transcript cannot be shown here.
+        The app itself streams it from the pdfs/ folder next to metadata.csv.</p>
+      <p>${esc(r.summary || '')}</p>`;
+    pane.appendChild(sheet);
+    return;
+  }
   pane.innerHTML = '<p class="loading">Loading...</p>';
   const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   try {
@@ -386,7 +414,16 @@ document.getElementById('nextPage').addEventListener('click', () => changePage(1
 document.getElementById('searchInput').addEventListener('input', debounce(searchInterviews, 300));
 document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') searchInterviews(); });
 
-function start() {
+async function start() {
+  const results = document.getElementById('searchResults');
+  results.innerHTML = '<p class="loading">Loading __COUNT__ records...</p>';
+  try {
+    RECORDS = await loadRecords();
+  } catch (err) {
+    results.innerHTML = `<p class="error">Could not load the records: ${esc(err.message)}</p>`;
+    return;
+  }
+  DF = sortRecords(RECORDS, 'released_at', 'desc');   // df = df.sort_values('released_at', ascending=False)
   document.getElementById('searchInput').focus();
   fetchInterviews();
 }

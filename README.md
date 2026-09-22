@@ -22,11 +22,22 @@ expert_insights_export/
   requirements.txt
 ```
 
-`metadata.csv` and `pdfs/` here are placeholders. Replace them with the real export;
-the app reads these columns from the CSV:
+`metadata.csv` and `pdfs/` here are placeholders. Replace them with the real export
+(the real files are deliberately not committed to this repository); the app reads
+these columns from the CSV and ignores any others:
 
 `id, title, primary_companies, primary_company_ticker, released_at, source_label,
 source_descriptor, summary, page_count`
+
+## Date parsing fix
+
+The bundled macOS build calls `pd.to_datetime(..., utc=True, errors='coerce')` without a
+format. A real export mixes `2026-09-05T17:30:00` and `2026-09-05T12:00:00+00:00` in
+`released_at`; pandas infers the format from the first row and silently turns every
+row in the other style into a blank date (794 of 4,732 rows in the September 2026
+export, all of them the newest records, which then sort to the end). `app.py` here
+passes `format='ISO8601'`, which parses both styles. Rebuild the macOS binary from this
+source to pick up the fix.
 
 ## Run from source
 
@@ -63,7 +74,13 @@ re-implemented in the page, and PDFs are drawn with pdf.js. Rebuild it after
 changing the data with:
 
 ```
-python3 preview/build_preview.py expert_insights_export preview/expert-insights-preview.html
+python3 preview/build_preview.py expert_insights_export preview/expert-insights-preview.html \
+    --note "Data: one sentence for the banner"
 ```
+
+The records are embedded gzip-compressed (a 4,732-record export becomes a 4.4MB page),
+and every `pdfs/<id>.pdf` that exists is embedded and drawn with pdf.js; records without
+a PDF show a notice instead. Pages above 16MB cannot be hosted as an artifact, so with a
+full PDF set embed a subset.
 
 `preview/make_sample_data.py <export dir>` regenerates the synthetic sample dataset.

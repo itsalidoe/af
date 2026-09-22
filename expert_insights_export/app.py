@@ -26,7 +26,7 @@ app = Flask(
 )
 
 df = pd.read_csv(CSV_FILE, dtype=str).fillna('')
-df['released_at'] = pd.to_datetime(df['released_at'], utc=True, errors='coerce')
+df['released_at'] = pd.to_datetime(df['released_at'], utc=True, errors='coerce', format='ISO8601')
 df = df.sort_values('released_at', ascending=False).reset_index(drop=True)
 
 print(f"Loaded {len(df):,} records.")
