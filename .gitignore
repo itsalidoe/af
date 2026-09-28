@@ -6,3 +6,4 @@ build/
 dist/
 *.spec
 preview/expert-insights-preview.html
+expert_insights_export/transcripts.sqlite

@@ -40,7 +40,17 @@ else:
 # Overrides: command line first, then environment, then the defaults above.
 CSV_FILE = Path(ARGS.csv or os.environ.get('EI_CSV') or CSV_FILE).expanduser()
 PDF_DIR = Path(ARGS.pdfs or os.environ.get('EI_PDF_DIR') or PDF_DIR).expanduser()
-INDEX_FILE = Path(ARGS.index or os.environ.get('EI_INDEX') or CSV_FILE.parent / 'transcripts.sqlite').expanduser()
+
+
+def default_index():
+    """transcripts.sqlite next to the CSV, else next to the app (where index_transcripts.py writes it)."""
+    candidates = [CSV_FILE.parent / 'transcripts.sqlite']
+    if not getattr(sys, 'frozen', False):
+        candidates.append(BUNDLE_DIR / 'transcripts.sqlite')
+    return next((c for c in candidates if c.exists()), candidates[0])
+
+
+INDEX_FILE = Path(ARGS.index or os.environ.get('EI_INDEX') or default_index()).expanduser()
 PORT = ARGS.port or int(os.environ.get('EI_PORT', 5000))
 
 app = Flask(
