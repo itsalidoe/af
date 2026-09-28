@@ -169,6 +169,26 @@ button:disabled {
     margin-bottom: 3px;
 }
 
+.index-status {
+    font-size: 11px;
+    color: #7f8c8d;
+    margin: -12px 0 14px;
+}
+
+.snippet {
+    font-size: 12px !important;
+    color: #34495e;
+    margin-top: 8px !important;
+    padding-left: 8px;
+    border-left: 3px solid #f1c40f;
+}
+
+.snippet mark {
+    background-color: #fff3a3;
+    color: inherit;
+    padding: 0 1px;
+}
+
 .pagination {
     display: flex;
     justify-content: space-between;

@@ -1,3 +1,8 @@
+import argparse
+import html
+import os
+import re
+import sqlite3
 import sys
 import threading
 import webbrowser
@@ -6,18 +11,37 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_file
 import pandas as pd
 
-# Locate the data folder (metadata.csv + pdfs/) and the bundled templates/static.
-# Frozen (PyInstaller .app): the .app is expected to sit inside the export folder,
+
+def parse_args():
+    p = argparse.ArgumentParser(description='Expert Insights: search an export and read its transcripts.')
+    p.add_argument('--csv', help='metadata.csv to load (default: next to the app; env EI_CSV)')
+    p.add_argument('--pdfs', help='folder holding <id>.pdf transcripts (default: pdfs/ next to metadata.csv; env EI_PDF_DIR)')
+    p.add_argument('--index', help='full-text index from index_transcripts.py (default: transcripts.sqlite next to metadata.csv; env EI_INDEX)')
+    p.add_argument('--port', type=int, help='port to serve on (default 5000; env EI_PORT)')
+    p.add_argument('--no-browser', action='store_true', help='do not open a browser tab')
+    args, _unknown = p.parse_known_args()   # a macOS .app launch can add arguments of its own
+    return args
+
+
+ARGS = parse_args()
+
+# Default locations. Frozen (the macOS .app): the .app sits inside the export folder,
 #   <export>/ExpertInsights.app/Contents/MacOS/ExpertInsights  ->  parents[3] == <export>
 if getattr(sys, 'frozen', False):
     DATA_DIR = Path(sys.executable).parents[3]
     BUNDLE_DIR = Path(sys._MEIPASS)
-    PDF_DIR = DATA_DIR / 'pdfs'
     CSV_FILE = DATA_DIR / 'metadata.csv'
+    PDF_DIR = DATA_DIR / 'pdfs'
 else:
     BUNDLE_DIR = Path(__file__).parent
-    CSV_FILE = Path(__file__).parent / 'metadata.csv'
-    PDF_DIR = Path(__file__).parent.parent / 'expert_insights_export' / 'pdfs'
+    CSV_FILE = BUNDLE_DIR / 'metadata.csv'
+    PDF_DIR = BUNDLE_DIR / 'pdfs'
+
+# Overrides: command line first, then environment, then the defaults above.
+CSV_FILE = Path(ARGS.csv or os.environ.get('EI_CSV') or CSV_FILE).expanduser()
+PDF_DIR = Path(ARGS.pdfs or os.environ.get('EI_PDF_DIR') or PDF_DIR).expanduser()
+INDEX_FILE = Path(ARGS.index or os.environ.get('EI_INDEX') or CSV_FILE.parent / 'transcripts.sqlite').expanduser()
+PORT = ARGS.port or int(os.environ.get('EI_PORT', 5000))
 
 app = Flask(
     __name__,
@@ -26,12 +50,88 @@ app = Flask(
 )
 
 df = pd.read_csv(CSV_FILE, dtype=str).fillna('')
+# format='ISO8601': exports mix "2026-09-05T17:30:00" and "2026-09-05T12:00:00+00:00"; without an
+# explicit format pandas infers one from the first row and blanks every row in the other style.
 df['released_at'] = pd.to_datetime(df['released_at'], utc=True, errors='coerce', format='ISO8601')
 df = df.sort_values('released_at', ascending=False).reset_index(drop=True)
 
-print(f"Loaded {len(df):,} records.")
+print(f"Loaded {len(df):,} records from {CSV_FILE}")
+if PDF_DIR.is_dir():
+    print(f"PDF folder: {PDF_DIR} ({sum(1 for p in PDF_DIR.iterdir() if p.suffix.lower() == '.pdf'):,} PDFs)")
+else:
+    print(f"PDF folder not found: {PDF_DIR}  (pass --pdfs or set EI_PDF_DIR)")
 
 SORT_FIELDS = {'released_at', 'title'}
+
+
+# ---- transcript full-text index (optional; built by index_transcripts.py) ----
+
+def open_index():
+    if not INDEX_FILE.exists():
+        print("Transcript index: none (search covers title, company, expert type and summary; "
+              "run index_transcripts.py to search inside the transcripts)")
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{INDEX_FILE}?mode=ro", uri=True, check_same_thread=False)
+        n = conn.execute("SELECT count(*) FROM files").fetchone()[0]
+        print(f"Transcript index: {n:,} transcripts ({INDEX_FILE})")
+        return conn
+    except sqlite3.Error as e:
+        print(f"Transcript index unusable ({INDEX_FILE}): {e}")
+        return None
+
+
+INDEX = open_index()
+INDEX_LOCK = threading.Lock()
+TOKEN_RE = re.compile(r'[^\W_]+')
+
+
+def fts_query(query):
+    """Free text -> FTS5 query: every word is required and matches as a prefix ("pric"* finds pricing)."""
+    tokens = TOKEN_RE.findall(query)
+    return ' '.join(f'"{t}"*' for t in tokens) if tokens else None
+
+
+def index_matches(query):
+    """ids of transcripts whose text contains every word of the query."""
+    q = fts_query(query)
+    if INDEX is None or not q:
+        return set()
+    try:
+        with INDEX_LOCK:
+            rows = INDEX.execute('SELECT id FROM transcripts WHERE transcripts MATCH ?', (q,)).fetchall()
+    except sqlite3.OperationalError as e:
+        print(f"Transcript index query failed for {query!r}: {e}")
+        return set()
+    return {r[0] for r in rows}
+
+
+def index_snippets(query, ids):
+    """Per id, an HTML-escaped excerpt with <mark> around the matched words."""
+    q = fts_query(query)
+    ids = list(ids)
+    if INDEX is None or not q or not ids:
+        return {}
+    sql = (f"SELECT id, snippet(transcripts, 1, ?, ?, ?, 18) FROM transcripts "
+           f"WHERE transcripts MATCH ? AND id IN ({','.join('?' * len(ids))})")
+    try:
+        with INDEX_LOCK:
+            rows = INDEX.execute(sql, ['\x01', '\x02', ' … ', q, *ids]).fetchall()
+    except sqlite3.OperationalError as e:
+        print(f"Transcript snippet query failed for {query!r}: {e}")
+        return {}
+    out = {}
+    for doc_id, snip in rows:
+        text = html.escape(' '.join(snip.split()))
+        out[doc_id] = text.replace('\x01', '<mark>').replace('\x02', '</mark>')
+    return out
+
+
+def index_count():
+    if INDEX is None:
+        return None
+    with INDEX_LOCK:
+        return INDEX.execute("SELECT count(*) FROM files").fetchone()[0]
 
 
 def serialize(records):
@@ -53,6 +153,16 @@ def serialize(records):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/api/status')
+def status():
+    return jsonify({
+        'records': len(df),
+        'pdf_dir': str(PDF_DIR),
+        'index': str(INDEX_FILE) if INDEX is not None else None,
+        'indexed': index_count(),
+    })
 
 
 @app.route('/api/interviews')
@@ -94,16 +204,26 @@ def search_interviews():
                 | df['source_descriptor'].str.contains(query, case=False, na=False, regex=False)
                 | df['summary'].str.contains(query, case=False, na=False, regex=False)
             )
+            in_transcript = index_matches(query)
+            if in_transcript:
+                mask = mask | df['id'].isin(in_transcript)
             results = df[mask]
         else:
+            in_transcript = set()
             results = df
 
         sorted_results = results.sort_values(by=sort_by, ascending=sort_order == 'asc', na_position='last')
         start = (page - 1) * per_page
         page_df = sorted_results.iloc[start:start + per_page]
 
+        interviews = serialize(page_df.to_dict('records'))
+        snippets = index_snippets(query, [r['id'] for r in interviews if r['id'] in in_transcript])
+        for r in interviews:
+            if r['id'] in snippets:
+                r['snippet'] = snippets[r['id']]
+
         return jsonify({
-            'interviews': serialize(page_df.to_dict('records')),
+            'interviews': interviews,
             'total': len(results),
             'page': page,
             'per_page': per_page,
@@ -119,9 +239,6 @@ def serve_pdf(doc_id):
     if not pdf_path.exists():
         return 'PDF not found', 404
     return send_file(pdf_path, mimetype='application/pdf')
-
-
-PORT = 5000
 
 
 def free_port(port):
@@ -154,5 +271,6 @@ def open_browser():
 
 if __name__ == '__main__':
     free_port(PORT)
-    threading.Thread(target=open_browser, daemon=True).start()
+    if not ARGS.no_browser:
+        threading.Thread(target=open_browser, daemon=True).start()
     app.run(debug=False, port=PORT)

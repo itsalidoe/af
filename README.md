@@ -13,12 +13,13 @@ be run and modified on any platform.
 
 ```
 expert_insights_export/
-  app.py              Flask app (search, sort, pagination, PDF serving)
+  app.py                 Flask app (search, sort, pagination, PDF serving)
+  index_transcripts.py   one-time indexer that makes the text inside the PDFs searchable
   templates/index.html
   static/script.js
   static/style.css
-  metadata.csv        SYNTHETIC sample data (36 records) so the app runs out of the box
-  pdfs/<id>.pdf       one placeholder PDF per sample record
+  metadata.csv           SYNTHETIC sample data (36 records) so the app runs out of the box
+  pdfs/<id>.pdf          one placeholder PDF per sample record
   requirements.txt
 ```
 
@@ -50,6 +51,45 @@ python app.py
 
 The app frees port 5000 if something else holds it, starts on
 http://localhost:5000 and opens a browser tab after two seconds.
+
+## Using a PDF folder and CSV that live somewhere else
+
+Nothing has to be moved. Point the app at the files with flags or environment variables
+(flag wins over variable, variable over the default location):
+
+| What | Flag | Variable | Default |
+|---|---|---|---|
+| metadata.csv | `--csv` | `EI_CSV` | next to `app.py` (next to the `.app` folder when frozen) |
+| transcript PDFs | `--pdfs` | `EI_PDF_DIR` | `pdfs/` next to the CSV |
+| full-text index | `--index` | `EI_INDEX` | `transcripts.sqlite` next to the CSV |
+| port | `--port` | `EI_PORT` | 5000 |
+
+`--no-browser` skips opening a tab. For example, with the export CSV copied next to
+`app.py` and the PDFs still in Downloads:
+
+```
+python app.py --pdfs ~/Downloads/pdfs
+```
+
+## Searching inside the transcripts
+
+Out of the box the search box matches the title, company, expert type and summary
+columns of the CSV. To search the text of the PDFs as well, build the index once:
+
+```
+python index_transcripts.py --pdfs ~/Downloads/pdfs
+python app.py --pdfs ~/Downloads/pdfs
+```
+
+The indexer reads every `<id>.pdf` with MuPDF in parallel (a few thousand transcripts take
+a few minutes), stores the text in `transcripts.sqlite` (SQLite FTS5), and is incremental:
+run it again after adding files and only the new or changed ones are read. When the index
+exists the app reports it on startup and under the sort controls, every word typed must
+appear (as a word prefix, so `pric` finds pricing) in the transcript, and matching results
+show a highlighted excerpt under the summary. Without an index everything behaves as before.
+
+The macOS `.app` was built before this feature existed; rebuild it from this source
+with PyInstaller (add `pymupdf` to the bundle) or run from source.
 
 ## Where the macOS build looks for its data
 

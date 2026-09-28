@@ -49,6 +49,7 @@ function displayResults(results) {
         const ticker = r.primary_company_ticker ? ` (${r.primary_company_ticker})` : '';
         const descriptor = r.source_descriptor ? `<span class="topic">${r.source_descriptor}</span>` : '';
         const date = r.released_at ? new Date(r.released_at).toLocaleDateString() : '';
+        const snippet = r.snippet ? `<p class="snippet">${r.snippet}</p>` : '';
 
         item.innerHTML = `
             <h3>${r.title || '(No title)'}</h3>
@@ -56,6 +57,7 @@ function displayResults(results) {
             <p class="date">${date}</p>
             <div class="topics">${descriptor}</div>
             <p class="summary">${truncate(r.summary || '', 150)}</p>
+            ${snippet}
         `;
         item.onclick = () => displayPDF(r.id);
         container.appendChild(item);
@@ -109,7 +111,20 @@ function debounce(func, wait) {
 
 document.getElementById('searchInput').addEventListener('input', debounce(searchInterviews, 300));
 
+function loadStatus() {
+    fetch('/api/status')
+        .then(r => r.json())
+        .then(s => {
+            const el = document.getElementById('indexStatus');
+            el.textContent = s.indexed === null
+                ? 'Searching titles, companies, expert types and summaries. Run index_transcripts.py to search inside the transcripts too.'
+                : `Searching titles, companies, expert types, summaries and the text of ${s.indexed.toLocaleString()} transcripts.`;
+        })
+        .catch(() => {});
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('searchInput').focus();
+    loadStatus();
     fetchInterviews();
 });
