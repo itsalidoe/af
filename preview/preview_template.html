@@ -134,6 +134,9 @@
   .topics { display: flex; flex-wrap: wrap; margin-top: 6px; }
   .topic { background-color: var(--accent); color: #fff; padding: 3px 8px; border-radius: 12px; font-size: 11px; margin-right: 5px; margin-bottom: 3px; }
   .topic.pdf { background-color: var(--company); }
+  .index-status { font-size: 11px; color: var(--muted); margin: -12px 0 14px; }
+  .snippet { font-size: 12px !important; color: var(--ink-2); margin-top: 8px !important; padding-left: 8px; border-left: 3px solid #f1c40f; }
+  .snippet mark { background-color: #fff3a3; color: inherit; padding: 0 1px; }
   .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 20px; gap: 8px; }
   .pagination button { border-radius: 4px; padding: 8px 14px; }
   #pageInfo { font-size: 12px; color: var(--summary); text-align: center; font-variant-numeric: tabular-nums; }
@@ -172,6 +175,7 @@
       </select>
       <button id="sortOrder" type="button" aria-label="Toggle sort order">&#8595;</button>
     </div>
+    <p id="indexStatus" class="index-status"></p>
     <div id="searchResults"></div>
     <div class="pagination">
       <button id="prevPage" type="button">Previous</button>
@@ -191,6 +195,38 @@
 // ---- Data (what metadata.csv becomes after app.py's read_csv / to_datetime / serialize) ----
 const DATA_B64 = '__DATA_B64__';   // gzip(JSON array of records), base64
 const PAGES = __PAGES__;   // id -> [page images rendered from pdfs/<id>.pdf at build time]
+const TEXTS = __TEXTS__;   // id -> transcript text extracted from pdfs/<id>.pdf at build time
+
+// ---- transcript full-text search: the same rule as app.py + index_transcripts.py (every word required,
+// matched as a word prefix), applied to the texts embedded above ----
+const WORD_RE = /[\p{L}\p{N}]+/gu;
+const queryTokens = query => query.match(WORD_RE) || [];
+const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const prefixPattern = token => '(?<![\\p{L}\\p{N}])' + escapeRegExp(token);
+
+function indexMatches(query) {
+  const tokens = queryTokens(query);
+  const hits = new Set();
+  if (!tokens.length) return hits;
+  const res = tokens.map(t => new RegExp(prefixPattern(t), 'iu'));
+  for (const id in TEXTS) if (res.every(re => re.test(TEXTS[id]))) hits.add(id);
+  return hits;
+}
+
+function indexSnippet(query, id) {
+  const text = TEXTS[id];
+  const tokens = queryTokens(query);
+  if (!text || !tokens.length) return '';
+  const any = new RegExp(tokens.map(prefixPattern).join('|'), 'giu');
+  const first = any.exec(text);
+  if (!first) return '';
+  let start = Math.max(0, first.index - 70);
+  let end = Math.min(text.length, first.index + first[0].length + 110);
+  if (start > 0) { const i = text.indexOf(' ', start); if (i !== -1 && i < first.index) start = i + 1; }
+  if (end < text.length) { const i = text.lastIndexOf(' ', end); if (i > first.index + first[0].length) end = i; }
+  const marked = text.slice(start, end).replace(/\s+/g, ' ').replace(any, m => '\x01' + m + '\x02');
+  return (start > 0 ? '\u2026 ' : '') + esc(marked).replace(/\x01/g, '<mark>').replace(/\x02/g, '</mark>') + (end < text.length ? ' \u2026' : '');
+}
 let RECORDS = [];
 let DF = [];
 
@@ -233,13 +269,18 @@ function apiSearch({ query = '', page = 1, per_page = 10, sort_by = 'released_at
   query = query.trim();
   if (!SORT_FIELDS.has(sort_by)) sort_by = 'released_at';
   const q = query.toLowerCase();
+  const inTranscript = query ? indexMatches(query) : new Set();
   const results = query
     ? DF.filter(r => ['title', 'primary_companies', 'source_descriptor', 'summary']
-        .some(f => (r[f] || '').toLowerCase().includes(q)))
+        .some(f => (r[f] || '').toLowerCase().includes(q)) || inTranscript.has(r.id))
     : DF;
   const sorted = sortRecords(results, sort_by, sort_order);
   const start = (page - 1) * per_page;
-  return { interviews: serialize(sorted.slice(start, start + per_page)), total: results.length, page, per_page };
+  const interviews = serialize(sorted.slice(start, start + per_page));
+  for (const r of interviews) {
+    if (inTranscript.has(r.id)) { const snip = indexSnippet(query, r.id); if (snip) r.snippet = snip; }
+  }
+  return { interviews, total: results.length, page, per_page };
 }
 
 // ---- static/script.js, with fetch() swapped for the functions above ----
@@ -287,6 +328,7 @@ function displayResults(results) {
       <p class="date">${date}</p>
       <div class="topics">${descriptor}</div>
       <p class="summary">${esc(truncate(r.summary || '', 150))}</p>
+      ${r.snippet ? `<p class="snippet">${r.snippet}</p>` : ''}
     `;
     item.onclick = () => displayPDF(r.id);
     item.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); displayPDF(r.id); } };
@@ -386,6 +428,10 @@ async function start() {
     return;
   }
   DF = sortRecords(RECORDS, 'released_at', 'desc');   // df = df.sort_values('released_at', ascending=False)
+  const n = Object.keys(TEXTS).length;
+  document.getElementById('indexStatus').textContent = n
+    ? `Searching titles, companies, expert types, summaries and the text of ${n.toLocaleString()} transcript${n === 1 ? '' : 's'}.`
+    : 'Searching titles, companies, expert types and summaries. No transcript text is included in this preview.';
   document.getElementById('searchInput').focus();
   fetchInterviews();
 }

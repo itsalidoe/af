@@ -40,23 +40,24 @@ from PIL import Image
 
 DPI = 130   # 1105 px wide letter pages: crisp in the 760 px pane, also on high-density screens
 
-def render_pages(pdf_path):
-    """Rasterise every page with MuPDF and pack it as a lossless WebP data URI."""
-    out = []
+def render_pdf(pdf_path):
+    """Rasterise every page with MuPDF (lossless WebP data URIs) and extract its text for search."""
+    images, text = [], []
     with pymupdf.open(pdf_path) as doc:
         for page in doc:
             pix = page.get_pixmap(dpi=DPI)
             im = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
             buf = io.BytesIO()
             im.save(buf, format='WEBP', lossless=True, quality=100)
-            out.append('data:image/webp;base64,' + base64.b64encode(buf.getvalue()).decode('ascii'))
-    return out
+            images.append('data:image/webp;base64,' + base64.b64encode(buf.getvalue()).decode('ascii'))
+            text.append(page.get_text())
+    return images, '\n'.join(text)
 
-pdfs = {}
+pdfs, texts = {}, {}
 for r in records:
     p = EXPORT / 'pdfs' / f"{r['id']}.pdf"
     if p.exists():
-        pdfs[r['id']] = render_pages(p)
+        pdfs[r['id']], texts[r['id']] = render_pdf(p)
 
 def js(obj):
     return json.dumps(obj, ensure_ascii=True, separators=(',', ':')).replace('</', '<\\/')
@@ -68,20 +69,22 @@ n, npdf = len(records), len(pdfs)
 if not note:
     note = f"Data: {n:,} records from metadata.csv."
 if npdf == n:
-    pdf_note = f"PDFs: all {npdf:,} included."
+    pdf_note = f"PDFs: all {npdf:,} included and their text is searchable."
 elif npdf == 0:
     pdf_note = "PDFs: none were provided, so the document pane shows a notice instead."
 else:
-    pdf_note = f"PDFs: {npdf:,} of {n:,} included; records that have one carry a PDF badge, the rest show a notice."
+    pdf_note = (f"PDFs: {npdf:,} of {n:,} included and their text is searchable; "
+                "records that have one carry a PDF badge, the rest show a notice.")
 
 html = (Path(__file__).parent / 'preview_template.html').read_text(encoding='utf-8')
 for k, v in {
     '__DATA_B64__': data_b64,
     '__PAGES__': js(pdfs),
+    '__TEXTS__': js(texts),
     '__COUNT__': f"{n:,}",
     '__DATA_NOTE__': note.replace('<', '&lt;'),
     '__PDF_NOTE__': pdf_note.replace('<', '&lt;'),
 }.items():
     html = html.replace(k, v)
 OUT.write_text(html, encoding='utf-8')
-print(f"wrote {OUT} ({OUT.stat().st_size/1024/1024:.2f} MB): {n} records ({len(data_json)/1024/1024:.1f} MB JSON -> {len(data_b64)/1024/1024:.1f} MB gzip+base64), {npdf} pdfs rendered to {sum(len(v) for v in pdfs.values())} page images")
+print(f"wrote {OUT} ({OUT.stat().st_size/1024/1024:.2f} MB): {n} records ({len(data_json)/1024/1024:.1f} MB JSON -> {len(data_b64)/1024/1024:.1f} MB gzip+base64), {npdf} pdfs rendered to {sum(len(v) for v in pdfs.values())} page images, {sum(len(v) for v in texts.values())/1024:.0f} KB of transcript text")
